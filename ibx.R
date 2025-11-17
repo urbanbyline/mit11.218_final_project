@@ -16,35 +16,16 @@ mta_lines <- st_read("data/MTA_Subway_Service_Lines_20251116.geojson")
 mta_stations <- st_read("data/MTA_Subway_Stations_20251116.geojson")
 lirr_lines <- st_read("data/MTA_Rail_Branches_20251116.geojson")
 
-### mta stations clean up
-
-queens_mta_stations <- mta_stations |>
-  filter(borough == "Q")
-
-bk_mta_stations<- mta_stations |>
-  filter(borough == "Bk")
-
-#### ibx station clean up
-
+###### create buffer
 ibx_stations_2d <- st_zm(ibx_stations)  # drop Z (and M) dimension if present
-# convert 0.5 miles to meters
 half_mile_meters <- 0.5 * 1609.34  # ≈ 804.67 meters
-
-# create buffer
 ibx_stations_buffer <- st_buffer(ibx_stations_2d, dist = half_mile_meters)
-bk_mta_stations_buffer <- st_buffer(bk_mta_stations, dist = half_mile_meters)
-queens_mta_stations_buffer <- st_buffer(queens_mta_stations, dist = half_mile_meters)
+
 
 # check result
 plot(st_geometry(ibx_stations_buffer), col = 'lightblue')
 plot(st_geometry(ibx_stations_2d), add = TRUE, pch = 16, col = 'red')
 
-
-mapview(ibx_stations_buffer)
-mapview(mta_lines)
-mapview(mta_stations)
-mapview(bk_mta_stations_buffer)
-mapview(bk_mta_stations)
 
 B01001_total <- get_acs(
   geography = "tract",
@@ -82,6 +63,30 @@ buffer_pop <- tracts_within_buffer %>%
   )
 
 buffer_pop <- st_transform(buffer_pop, 4326)
+
+tracts_within_buffer <- st_intersection(
+  ibx_stations_buffer %>% mutate(buffer_id = row_number()),
+  B01001_total
+)
+
+tracts_within_buffer <- tracts_within_buffer %>%
+  mutate(
+    intersect_area = st_area(geometry),
+    tract_area = st_area(st_make_valid(B01001_total)[match(GEOID, B01001_total$GEOID), ]),
+    pop_weighted = (B01001_001E * as.numeric(intersect_area / tract_area))
+  )
+
+buffer_pop <- tracts_within_buffer %>%
+  group_by(Name, Connecting) %>%
+  summarize(
+    total_pop = sum(pop_weighted, na.rm = TRUE),
+    geometry = st_union(geometry),
+    .groups ="drop"
+  )
+
+buffer_pop <- st_transform(buffer_pop, 4326)
+
+#####
 
 
 ggplot() +
@@ -205,6 +210,7 @@ leaflet() %>%
   addPolygons(
     data = county_leaflet,
     color = "black",
+    fill= FALSE,
     weight = 1.5,
     popup = lapply(1:nrow(buffer_pop), function(i) {
       HTML(paste0(
